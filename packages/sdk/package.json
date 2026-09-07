@@ -1,0 +1,34 @@
+{
+  "name": "@omniroute/sdk",
+  "version": "1.0.0",
+  "description": "Dependency-free OmniRoute v1 client for routing and unattended task workers",
+  "type": "module",
+  "main": "./src/index.js",
+  "bin": {
+    "omniroute-client": "./src/cli.js"
+  },
+  "types": "./src/index.d.ts",
+  "exports": {
+    "./worker": {
+      "types": "./src/worker.d.ts",
+      "import": "./src/worker.js"
+    },
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src/index.js",
+    "src/index.d.ts",
+    "src/cli.js",
+    "src/worker.js",
+    "src/worker.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.22.2 <23 || >=24.0.0 <27"
+  },
+  "license": "MIT",
+  "sideEffects": false
+}

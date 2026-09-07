@@ -1,0 +1,17 @@
+[
+  {
+    "id": "arithmetic",
+    "prompt": "task: Calculate 17 + 25.\noutput: Only the integer, no explanation.",
+    "expected": "42"
+  },
+  {
+    "id": "extraction",
+    "prompt": "task: Extract the city from the input.\ninput: The package arrived in Denver yesterday.\noutput: Only the city name.",
+    "expected": "Denver"
+  },
+  {
+    "id": "json",
+    "prompt": "task: Return a JSON object with exactly one key named ok and the boolean value true.\noutput: JSON only, no markdown.",
+    "expectedJson": { "ok": true }
+  }
+]

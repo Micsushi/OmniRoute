@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.typecheck-core.json",
+  "files": [
+    "src/app/api/v1/capabilities/route.ts",
+    "src/app/api/v1/tasks/route.ts",
+    "src/app/api/v1/tasks/claim/route.ts",
+    "src/app/api/v1/tasks/[id]/route.ts",
+    "src/app/api/v1/tasks/[id]/events/route.ts",
+    "packages/sdk/src/index.d.ts",
+    "packages/sdk/src/worker.d.ts",
+    "tests/integration/automation-contract.test.ts",
+    "tests/unit/automation-tasks.test.ts"
+  ]
+}
