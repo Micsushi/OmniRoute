@@ -13,5 +13,16 @@
     "id": "json",
     "prompt": "task: Return a JSON object with exactly one key named ok and the boolean value true.\noutput: JSON only, no markdown.",
     "expectedJson": { "ok": true }
+  },
+  {
+    "id": "json-constrained",
+    "prompt": "task: Return a JSON object with exactly one key named ok and the boolean value true.\noutput: JSON only, no markdown.",
+    "schema": {
+      "type": "object",
+      "properties": { "ok": { "type": "boolean" } },
+      "required": ["ok"],
+      "additionalProperties": false
+    },
+    "expectedJson": { "ok": true }
   }
 ]

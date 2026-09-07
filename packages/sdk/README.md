@@ -141,6 +141,15 @@ temporary databases and loopback ports, no provider credentials or models. Run
 no build step. This command is suitable for offline CI after dependencies are installed;
 no new hosted workflow is enabled by this package.
 
+The scoped gate checks the new queue, capabilities, SDK declarations and queue integration.
+The full chat handler also has an offline JSON/SSE mock-provider integration test. Its
+transitive upstream executor graph is not strict-null clean on this branch's base; for
+example `audioRegistry.ts` and `executors/default.ts` produce errors when that graph is
+added to the strict core configuration. Do not mistake the scoped gate for a full app
+build or broad strict-null certification. The inherited lockfile also fails `npm ci`
+with a missing `brace-expansion@1.1.18` entry; an isolated dependency install was used
+for these local checks without modifying the shared checkout's lockfile.
+
 Back up the gateway data directory before upgrading. Apply the normal migration runner,
 then verify capabilities, key isolation, submit/claim/complete, restart and readback. Keep
 the previous runtime and backup for rollback; old releases ignore the new tables. Do not
@@ -170,3 +179,22 @@ Ollama runtime to reproduce. It never downloads models or uses paid providers. M
 Server2 models were not requalified in this task; existing runtime settings stay unchanged.
 The model's [Apache-2.0 license](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/367ae90eaf97b8d64787d6ee9101a04460b55392/LICENSE)
 and [Ollama model entry](https://ollama.com/library/qwen2.5:0.5b-instruct) identify the tested family.
+
+A bounded follow-up used `qwen2.5:1.5b-instruct`, Q4_K_M, 986,061,892 bytes,
+digest `65ec06548149b04c096a120e4a6da9d4017ea809c91734ea5631e89f96ddc57b`.
+Runtime-reported allocation was 1,038,817,792 bytes, zero VRAM. The same three
+unconstrained probes passed 2/3: arithmetic and extraction passed, fenced JSON failed.
+Representative CPU timings were 3520 ms cold, 826 ms for extraction and 1400 ms for
+unconstrained JSON, with 19.49–34.36 generated tokens/second. This is not a general
+quality qualification. Its [model entry](https://ollama.com/library/qwen2.5:1.5b-instruct)
+records the Apache-2.0 license and quantization.
+
+An additional schema-constrained JSON probe passed on both models: 503 ms for 0.5B
+and 835 ms for 1.5B in the follow-up run. The fixture now retains both unconstrained
+and constrained cases. Set `OLLAMA_BENCH_MODEL=qwen2.5:1.5b-instruct` to select the
+larger installed model; the script rejects models above 1.2 GB and never downloads one.
+Ollama's native `format` schema controls decoding; its OpenAI-compatible API supports
+`response_format` ([official structured-output documentation](https://docs.ollama.com/capabilities/structured-outputs)).
+The SDK forwards that field. Consumers must still parse and validate output against
+their schema, and separately assess semantic quality. The inference-only queue helper
+does not accept arbitrary structured-output policy yet; use direct SDK requests for it.

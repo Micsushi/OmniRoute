@@ -11,7 +11,7 @@ if (
   baseUrl.password
 )
   throw new Error("An owned loopback runtime is required");
-const model = "qwen2.5:0.5b-instruct";
+const model = process.env.OLLAMA_BENCH_MODEL ?? "qwen2.5:0.5b-instruct";
 const probes = JSON.parse(
   await readFile(
     new URL("../../tests/fixtures/omniroute-local-probes.json", import.meta.url),
@@ -31,7 +31,7 @@ async function api(path, body) {
 }
 const inventory = await api("/api/tags");
 const installed = inventory.models.find((entry) => entry.name === model);
-if (!installed || installed.size > 600_000_000)
+if (!installed || installed.size > 1_200_000_000)
   throw new Error("Expected bounded model is not installed");
 const results = [];
 for (const probe of probes) {
@@ -39,6 +39,7 @@ for (const probe of probes) {
   const result = await api("/api/generate", {
     model,
     prompt: probe.prompt,
+    format: probe.schema,
     stream: false,
     keep_alive: "1m",
     options: {
@@ -94,7 +95,7 @@ console.log(
       temperature: 0,
       results,
       qualification:
-        "Three deterministic smoke probes only; not a reasoning or tool-use evaluation.",
+        "Three unconstrained smoke probes and one schema-constrained probe; not a reasoning or tool-use evaluation.",
     },
     null,
     2
