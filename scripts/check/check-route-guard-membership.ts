@@ -16,10 +16,10 @@
 // with a justification so the gate exits 0 today; only NEW spawn-capable routes
 // that slip past the guard fail. KNOWN_UNCLASSIFIED is empty today (clean
 // baseline) — keep it that way; an entry here is a documented security debt.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isLocalOnlyPath } from "@/server/authz/routeGuard.ts";
 
 // Inline stale-allowlist helper (mirrors scripts/check/lib/allowlist.mjs).
 // The TypeScript gate cannot import the .mjs helper directly; keep this in sync.
@@ -189,77 +189,108 @@ function collectRouteFiles(dir: string): string[] {
   return out;
 }
 
-function main(): void {
+async function main(): Promise<number> {
   const cwd = process.cwd();
+  const previousDataDir = process.env.DATA_DIR;
+  const isolatedDataDir = mkdtempSync(join(tmpdir(), "omniroute-route-guard-"));
+  let closeIsolatedDatabase: (() => void) | undefined;
 
-  // --- Subcheck 1 (original): SPAWN_CAPABLE_ROUTE_ROOTS ---
-  const apiPaths = SPAWN_CAPABLE_ROUTE_ROOTS.flatMap(collectRouteFiles)
-    .map(routeFileToApiPath)
-    .sort();
+  // routeGuard imports runtime settings, which can initialize the SQLite store.
+  // This gate is source-only and must never inspect or mutate the operator's
+  // default database, even when DATA_DIR is already set in the parent shell.
+  process.env.DATA_DIR = isolatedDataDir;
 
-  const unclassified = findUnclassifiedSpawnRoutes(apiPaths, isLocalOnlyPath, KNOWN_UNCLASSIFIED);
+  try {
+    const { closeDbInstance } = await import("@/lib/db/core.ts");
+    closeIsolatedDatabase = () => {
+      closeDbInstance();
+    };
+    const { isLocalOnlyPath } = await import("@/server/authz/routeGuard.ts");
 
-  // --- Subcheck 2 (6A.8): source-based scan — ALL route.ts files ---
-  // Find every route.ts that imports child_process / worker_threads and verify it is
-  // either classified local-only or frozen in KNOWN_UNCLASSIFIED_SOURCE_SPAWN.
-  const spawnCapableFiles = findSpawnCapableRoutes(cwd);
+    // --- Subcheck 1 (original): SPAWN_CAPABLE_ROUTE_ROOTS ---
+    const apiPaths = SPAWN_CAPABLE_ROUTE_ROOTS.flatMap(collectRouteFiles)
+      .map(routeFileToApiPath)
+      .sort();
 
-  // Stale-enforcement: if a route was fixed (no longer spawn-capable, or was classified),
-  // the KNOWN_UNCLASSIFIED_SOURCE_SPAWN entry must be removed.
-  assertNoStaleEntries(
-    KNOWN_UNCLASSIFIED_SOURCE_SPAWN,
-    spawnCapableFiles,
-    "route-guard-membership/source-spawn"
-  );
+    const unclassified = findUnclassifiedSpawnRoutes(apiPaths, isLocalOnlyPath, KNOWN_UNCLASSIFIED);
 
-  // Find spawn-capable routes outside SPAWN_CAPABLE_ROUTE_ROOTS that are not classified
-  // local-only and not in the source-spawn allowlist.
-  const unclassifiedSourceSpawn = spawnCapableFiles.filter((rel) => {
-    const apiPath = routeFileToApiPath(rel);
-    // Already covered by subcheck 1 (in a SPAWN_CAPABLE_ROUTE_ROOT)? Skip.
-    if (SPAWN_CAPABLE_ROUTE_ROOTS.some((root) => rel.startsWith(root + "/"))) return false;
-    // In the source-spawn allowlist? Skip.
-    if (rel in KNOWN_UNCLASSIFIED_SOURCE_SPAWN) return false;
-    // Classified local-only? Skip.
-    if (isLocalOnlyPath(apiPath)) return false;
-    return true;
-  });
+    // --- Subcheck 2 (6A.8): source-based scan — ALL route.ts files ---
+    // Find every route.ts that imports child_process / worker_threads and verify it is
+    // either classified local-only or frozen in KNOWN_UNCLASSIFIED_SOURCE_SPAWN.
+    const spawnCapableFiles = findSpawnCapableRoutes(cwd);
 
-  // Report
-  let failed = false;
-
-  if (unclassified.length) {
-    console.error(
-      `[route-guard-membership] CRITICAL — ${unclassified.length} spawn-capable route(s) in SPAWN_CAPABLE_ROUTE_ROOTS NOT classified local-only (RCE-via-tunnel risk, Hard Rules #15/#17):\n` +
-        unclassified.map((p) => `  ✗ ${p}`).join("\n") +
-        `\n  → add a matching prefix to LOCAL_ONLY_API_PREFIXES or a pattern to LOCAL_ONLY_API_PATTERNS in src/server/authz/routeGuard.ts, or freeze in KNOWN_UNCLASSIFIED with justification.`
+    // Stale-enforcement: if a route was fixed (no longer spawn-capable, or was classified),
+    // the KNOWN_UNCLASSIFIED_SOURCE_SPAWN entry must be removed.
+    assertNoStaleEntries(
+      KNOWN_UNCLASSIFIED_SOURCE_SPAWN,
+      spawnCapableFiles,
+      "route-guard-membership/source-spawn"
     );
-    failed = true;
-  }
 
-  if (unclassifiedSourceSpawn.length) {
-    console.error(
-      `[route-guard-membership] CRITICAL — ${unclassifiedSourceSpawn.length} route.ts file(s) contain child_process/worker_threads but are NOT classified local-only (Hard Rules #15/#17):\n` +
-        unclassifiedSourceSpawn.map((p) => `  ✗ ${p} (${routeFileToApiPath(p)})`).join("\n") +
-        `\n  → classify in LOCAL_ONLY_API_PREFIXES / LOCAL_ONLY_API_PATTERNS, or freeze in KNOWN_UNCLASSIFIED_SOURCE_SPAWN with justification.`
+    // Find spawn-capable routes outside SPAWN_CAPABLE_ROUTE_ROOTS that are not classified
+    // local-only and not in the source-spawn allowlist.
+    const unclassifiedSourceSpawn = spawnCapableFiles.filter((rel) => {
+      const apiPath = routeFileToApiPath(rel);
+      // Already covered by subcheck 1 (in a SPAWN_CAPABLE_ROUTE_ROOT)? Skip.
+      if (SPAWN_CAPABLE_ROUTE_ROOTS.some((root) => rel.startsWith(root + "/"))) return false;
+      // In the source-spawn allowlist? Skip.
+      if (rel in KNOWN_UNCLASSIFIED_SOURCE_SPAWN) return false;
+      // Classified local-only? Skip.
+      if (isLocalOnlyPath(apiPath)) return false;
+      return true;
+    });
+
+    // Report
+    let failed = false;
+
+    if (unclassified.length) {
+      console.error(
+        `[route-guard-membership] CRITICAL — ${unclassified.length} spawn-capable route(s) in SPAWN_CAPABLE_ROUTE_ROOTS NOT classified local-only (RCE-via-tunnel risk, Hard Rules #15/#17):\n` +
+          unclassified.map((p) => `  ✗ ${p}`).join("\n") +
+          `\n  → add a matching prefix to LOCAL_ONLY_API_PREFIXES or a pattern to LOCAL_ONLY_API_PATTERNS in src/server/authz/routeGuard.ts, or freeze in KNOWN_UNCLASSIFIED with justification.`
+      );
+      failed = true;
+    }
+
+    if (unclassifiedSourceSpawn.length) {
+      console.error(
+        `[route-guard-membership] CRITICAL — ${unclassifiedSourceSpawn.length} route.ts file(s) contain child_process/worker_threads but are NOT classified local-only (Hard Rules #15/#17):\n` +
+          unclassifiedSourceSpawn.map((p) => `  ✗ ${p} (${routeFileToApiPath(p)})`).join("\n") +
+          `\n  → classify in LOCAL_ONLY_API_PREFIXES / LOCAL_ONLY_API_PATTERNS, or freeze in KNOWN_UNCLASSIFIED_SOURCE_SPAWN with justification.`
+      );
+      failed = true;
+    }
+
+    if (failed || process.exitCode === 1) return 1;
+
+    console.log(
+      `[route-guard-membership] OK — ` +
+        `${apiPaths.length} route(s) in ${SPAWN_CAPABLE_ROUTE_ROOTS.length} root(s) all local-only; ` +
+        `${spawnCapableFiles.length} source-spawn route(s) scanned, ` +
+        `${Object.keys(KNOWN_UNCLASSIFIED_SOURCE_SPAWN).length} frozen as security debt, ` +
+        `0 new gaps`
     );
-    failed = true;
+    return 0;
+  } finally {
+    try {
+      closeIsolatedDatabase?.();
+    } catch (error: unknown) {
+      console.warn("[route-guard-membership] isolated DB close failed:", error);
+    }
+    if (previousDataDir === undefined) {
+      delete process.env.DATA_DIR;
+    } else {
+      process.env.DATA_DIR = previousDataDir;
+    }
+    rmSync(isolatedDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
-
-  if (failed) process.exit(1);
-  if (process.exitCode === 1) return; // stale entries already logged
-
-  console.log(
-    `[route-guard-membership] OK — ` +
-      `${apiPaths.length} route(s) in ${SPAWN_CAPABLE_ROUTE_ROOTS.length} root(s) all local-only; ` +
-      `${spawnCapableFiles.length} source-spawn route(s) scanned, ` +
-      `${Object.keys(KNOWN_UNCLASSIFIED_SOURCE_SPAWN).length} frozen as security debt, ` +
-      `0 new gaps`
-  );
-  // Explicit exit: importing routeGuard.ts pulls in runtime settings, which opens
-  // the SQLite DB and starts a background health-check timer that would otherwise
-  // keep the process alive. The gate's work is done — exit cleanly.
-  process.exit(0);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || "").href) main();
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  main()
+    .then((exitCode) => process.exit(exitCode))
+    .catch((error: unknown) => {
+      console.error(error);
+      process.exit(1);
+    });
+}

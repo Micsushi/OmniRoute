@@ -1,22 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const previousDataDir = process.env.DATA_DIR;
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-route-guard-test-"));
+process.env.DATA_DIR = testDataDir;
+process.env.APP_LOG_TO_FILE = "false";
+process.on("exit", () => {
+  try {
+    closeDbInstance();
+  } catch {
+    // The test database is disposable; process exit must remain best-effort.
+  }
+  if (previousDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = previousDataDir;
+  fs.rmSync(testDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+});
+
+const { closeDbInstance } = await import("../../src/lib/db/core.ts");
+const {
   routeFileToApiPath,
   findUnclassifiedSpawnRoutes,
   isSpawnCapableSource,
   findSpawnCapableRoutes,
   KNOWN_UNCLASSIFIED_SOURCE_SPAWN,
-} from "../../scripts/check/check-route-guard-membership.ts";
-import { isLocalOnlyPath } from "../../src/server/authz/routeGuard.ts";
+} = await import("../../scripts/check/check-route-guard-membership.ts");
+const { isLocalOnlyPath } = await import("../../src/server/authz/routeGuard.ts");
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-// Synthetic isLocalOnlyPath: classifies anything under the three spawn-capable
-// prefixes via startsWith. Mirrors the real predicate's prefix semantics without
-// importing routeGuard.ts (keeps this test DB-free / pure).
+// Synthetic classifier for the pure matching tests. The real predicate below is
+// imported only after this test has selected a disposable DATA_DIR.
 const SYNTHETIC_PREFIXES = ["/api/mcp/", "/api/cli-tools/runtime/", "/api/services/"];
 const isLocalOnly = (path: string): boolean =>
   SYNTHETIC_PREFIXES.some((p) => path === p || path.startsWith(p));
@@ -160,5 +177,29 @@ test("6A.8: spawn-capable routes in SPAWN_CAPABLE_ROUTE_ROOTS are still all clas
   const rootPrefixes = ["/api/services/", "/api/mcp/", "/api/cli-tools/runtime/"];
   for (const prefix of rootPrefixes) {
     assert.ok(isLocalOnlyPath(prefix + "test"), `expected ${prefix} to be local-only`);
+  }
+});
+
+test("route-guard gate isolates its runtime import from the caller DATA_DIR", () => {
+  const operatorDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-route-guard-operator-"));
+  try {
+    const output = execFileSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/check/check-route-guard-membership.ts"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          DATA_DIR: operatorDataDir,
+          APP_LOG_TO_FILE: "false",
+        },
+        maxBuffer: 8 * 1024 * 1024,
+      }
+    );
+    assert.match(output, /\[route-guard-membership\] OK/);
+    assert.deepEqual(fs.readdirSync(operatorDataDir), []);
+  } finally {
+    fs.rmSync(operatorDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
