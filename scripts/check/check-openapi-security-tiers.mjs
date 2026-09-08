@@ -27,7 +27,10 @@ import * as yaml from "js-yaml";
 const ROOT = process.cwd();
 const OPENAPI_PATH = path.join(ROOT, "docs", "openapi.yaml");
 const ROUTE_GUARD_PATH = path.join(ROOT, "src", "server", "authz", "routeGuard.ts");
-const guardSrc = fs.readFileSync(ROUTE_GUARD_PATH, "utf-8");
+// Normalize checkout line endings before parsing inline comments. Without this,
+// the end anchor in the comment matcher cannot cross a CRLF and a valid pattern
+// with an inline comment is silently skipped on Windows.
+const guardSrc = fs.readFileSync(ROUTE_GUARD_PATH, "utf-8").replace(/\r\n?/g, "\n");
 
 // Capture an exported array's body up to its closing `\n];`. Unlike a `[^\]]+`
 // capture, this is immune to `]` characters inside comments or regex character
@@ -94,7 +97,7 @@ function parsePatterns(name) {
   const out = [];
   for (const raw of body.split("\n")) {
     const t = raw
-      .replace(/\/\/.*$/, "")
+      .replace(/\/\/[^\r\n]*$/, "")
       .trim()
       .replace(/,\s*$/, "")
       .trim();
@@ -106,16 +109,19 @@ function parsePatterns(name) {
 const LOCAL_ONLY_PREFIXES = parsePrefixes("LOCAL_ONLY_API_PREFIXES");
 const LOCAL_ONLY_PATTERNS = parsePatterns("LOCAL_ONLY_API_PATTERNS");
 const ALWAYS_PROTECTED_PATHS = parsePrefixes("ALWAYS_PROTECTED_API_PATHS");
+const ALWAYS_PROTECTED_PATTERNS = parsePatterns("ALWAYS_PROTECTED_API_PATTERNS");
 
 if (
   LOCAL_ONLY_PREFIXES.length === 0 ||
   LOCAL_ONLY_PATTERNS.length === 0 ||
-  ALWAYS_PROTECTED_PATHS.length === 0
+  ALWAYS_PROTECTED_PATHS.length === 0 ||
+  ALWAYS_PROTECTED_PATTERNS.length === 0
 ) {
   console.error(
     `[openapi-security-tiers] FAIL — could not parse routeGuard.ts constants ` +
       `(prefixes=${LOCAL_ONLY_PREFIXES.length}, patterns=${LOCAL_ONLY_PATTERNS.length}, ` +
-      `alwaysProtected=${ALWAYS_PROTECTED_PATHS.length})`
+      `alwaysProtected=${ALWAYS_PROTECTED_PATHS.length}, ` +
+      `alwaysProtectedPatterns=${ALWAYS_PROTECTED_PATTERNS.length})`
   );
   process.exit(1);
 }
@@ -155,10 +161,12 @@ for (const [pathStr, methods] of Object.entries(paths)) {
       const matchesPath = ALWAYS_PROTECTED_PATHS.some(
         (p) => pathStr === p || pathStr.startsWith(`${p}/`)
       );
-      if (!matchesPath) {
+      const matchesPattern = ALWAYS_PROTECTED_PATTERNS.some((re) => re.test(concretize(pathStr)));
+      if (!matchesPath && !matchesPattern) {
         errors.push(
           `${method.toUpperCase()} ${pathStr}: has x-always-protected but is NOT in ` +
-            `ALWAYS_PROTECTED_API_PATHS [${ALWAYS_PROTECTED_PATHS.join(", ")}]`
+            `ALWAYS_PROTECTED_API_PATHS [${ALWAYS_PROTECTED_PATHS.join(", ")}] ` +
+            `or matched by ALWAYS_PROTECTED_API_PATTERNS`
         );
       }
     }
